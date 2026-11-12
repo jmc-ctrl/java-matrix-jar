@@ -1,0 +1,5 @@
+com/matrixclient/model/Room.class
+com/matrixclient/client/MatrixHttpClient.class
+com/matrixclient/model/MatrixEvent.class
+com/matrixclient/ui/MainApp.class
+com/matrixclient/client/AuthService.class
