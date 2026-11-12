@@ -2,11 +2,10 @@ package com.matrixclient.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.http.HttpResponse;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -20,36 +19,44 @@ public class AuthService {
     public AuthService(MatrixHttpClient httpClient) {
         this.httpClient = httpClient;
         this.objectMapper = new ObjectMapper();
-        this.objectMapper.registerModule(new JavaTimeModule());
     }
 
     public CompletableFuture<String> login(String baseUrl, String userId, String password) {
-        logger.info("Attempting login for user: {}", userId);
-        
-        // Note: In a real app, we'd use the baseUrl provided to discover the /login endpoint correctly.
-        // For this implementation, we assume the baseUrl is the homeserver base.
+        // Serialize credentials as JSON instead of interpolating untrusted input into JSON text.
+        ObjectNode loginRequest = objectMapper.createObjectNode();
+        loginRequest.put("user", userId);
+        loginRequest.put("password", password);
+        loginRequest.put("device_name", "Matrix-JavaFX-Client");
+        final String jsonBody;
+        try {
+            jsonBody = objectMapper.writeValueAsString(loginRequest);
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(new IllegalStateException("Failed to encode login request", e));
+        }
+
+        logger.info("Attempting Matrix login.");
         String loginPath = "/_matrix/client/v3/login";
-        
-        String jsonBody = String.format(
-            "{\"user\":\"%s\", \"password\":\"%s\", \"device_name\":\"OpenClaw-JavaFX-Client\"}",
-            userId, password
-        );
 
         return httpClient.post(loginPath, jsonBody)
                 .thenApply(response -> {
                     if (response.statusCode() == 200) {
                         try {
                             JsonNode root = objectMapper.readTree(response.body());
-                            String token = root.get("access_token").asText();
+                            JsonNode tokenNode = root == null ? null : root.get("access_token");
+                            if (tokenNode == null || !tokenNode.isTextual() || tokenNode.asText().isBlank()) {
+                                throw new IllegalStateException("Login response did not contain a valid access token");
+                            }
+                            String token = tokenNode.asText();
                             httpClient.setAccessToken(token);
                             logger.info("Login successful.");
                             return token;
                         } catch (Exception e) {
                             throw new RuntimeException("Failed to parse login response", e);
                         }
-                    } else {
-                        throw new RuntimeException("Login failed with status " + response.statusCode() + ": " + response.body());
                     }
+                    // Response bodies may contain server-controlled or sensitive data; do not expose them in UI/errors.
+                    logger.warn("Matrix login failed with HTTP status {}.", response.statusCode());
+                    throw new RuntimeException("Login failed with status " + response.statusCode());
                 });
     }
 
@@ -58,7 +65,7 @@ public class AuthService {
         return httpClient.post("/_matrix/client/v3/logout", "{}")
                 .thenAccept(response -> {
                     if (response.statusCode() >= 400) {
-                        logger.warn("Logout failed: {}", response.body());
+                        logger.warn("Logout failed with HTTP status {}.", response.statusCode());
                     } else {
                         httpClient.setAccessToken(null);
                         logger.info("Logout successful.");
